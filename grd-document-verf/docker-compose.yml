@@ -1,0 +1,106 @@
+name: grd-document-verf
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: grd_document_verf
+      MYSQL_USER: grd
+      MYSQL_PASSWORD: grd
+      MYSQL_ROOT_PASSWORD: grd
+    ports:
+      - "127.0.0.1:3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mysqladmin ping -h 127.0.0.1 -ugrd -p$$MYSQL_PASSWORD --silent",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build:
+      context: ./backend
+      target: api
+    restart: unless-stopped
+    env_file:
+      - path: ./backend/.env
+        format: raw
+    environment:
+      DATABASE_URL: mysql+pymysql://grd:grd@mysql:3306/grd_document_verf
+      REDIS_URL: redis://redis:6379/0
+      QUARANTINE_STORAGE_PATH: /app/storage/quarantine
+      CELERY_DISPATCH_ENABLED: "true"
+    ports:
+      - "127.0.0.1:8003:8003"
+    volumes:
+      - ./storage/quarantine:/app/storage/quarantine
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8003/health', timeout=2)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  celery:
+    build:
+      context: ./backend
+      target: worker
+    restart: unless-stopped
+    env_file:
+      - path: ./backend/.env
+        format: raw
+    environment:
+      DATABASE_URL: mysql+pymysql://grd:grd@mysql:3306/grd_document_verf
+      REDIS_URL: redis://redis:6379/0
+      QUARANTINE_STORAGE_PATH: /app/storage/quarantine
+      CELERY_DISPATCH_ENABLED: "true"
+      CLAMAV_COMMAND: clamscan
+    volumes:
+      - ./storage/quarantine:/app/storage/quarantine
+      - clamav-data:/var/lib/clamav
+    depends_on:
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  mysql-data:
+    external: true
+    name: grd-mysql-data
+  redis-data:
+    name: grd-redis-data
+  clamav-data:
+    name: grd-clamav-data

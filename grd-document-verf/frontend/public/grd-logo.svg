@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 190" role="img" aria-labelledby="title desc">
+  <title id="title">GRD</title><desc id="desc">Getting Recruitments Done</desc>
+  <g fill="#050505">
+    <path d="M36 33h117v31H84c-20 0-36 16-36 36s16 36 36 36h40v-22H87V84h77v83H84C37 167 0 138 0 100s37-67 84-67Z"/>
+    <path d="M177 33h38v134h-38Zm51 0h72c43 0 70 24 70 67 0 27-11 46-31 57l40 50h-48l-53-67h19c22 0 35-16 35-40 0-23-13-36-35-36h-69Z"/>
+    <path d="M381 33h55c51 0 84 25 84 67s-33 67-84 67h-55Zm38 31v72h17c28 0 45-12 45-36s-17-36-45-36Z"/>
+  </g>
+  <text x="260" y="188" fill="#111" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="19" font-weight="700">GETTING RECRUITMENTS DONE</text>
+</svg>

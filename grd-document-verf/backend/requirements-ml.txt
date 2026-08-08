@@ -1,0 +1,6 @@
+torch
+torchvision
+transformers
+timm
+sentence-transformers
+easyocr

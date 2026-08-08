@@ -1,0 +1,22 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "GRD: Debug FastAPI Backend (8003)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/backend/.venv/Scripts/python.exe",
+      "module": "uvicorn",
+      "args": ["app.main:app", "--host", "127.0.0.1", "--port", "8003"],
+      "cwd": "${workspaceFolder}/backend",
+      "envFile": "${workspaceFolder}/backend/.env",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/backend",
+        "PYTHONUNBUFFERED": "1"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "subProcess": true
+    }
+  ]
+}

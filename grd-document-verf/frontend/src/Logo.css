@@ -1,0 +1,31 @@
+.login-brand {
+  display: grid;
+  place-items: center;
+  padding: 65px;
+  background: #fff;
+  border-right: 1px solid #e2e7ee;
+}
+
+.reference-logo {
+  width: min(430px, 92%);
+  height: auto;
+}
+
+.nav .logo {
+  width: 76px;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.nav .logo img {
+  display: block;
+  width: 62px;
+}
+
+@media (max-width: 950px) {
+  .login-brand { display: none; }
+}

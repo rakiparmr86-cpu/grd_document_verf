@@ -1,0 +1,4 @@
+{
+    "python.defaultInterpreterPath": "${workspaceFolder}/grd-document-verf/backend/.venv/Scripts/python.exe",
+    "python.terminal.activateEnvironment": true
+}
