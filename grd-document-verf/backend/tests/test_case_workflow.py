@@ -34,8 +34,11 @@ def test_case_supports_multiple_documents_and_records_history():
     assert len(case["documents"]) == 3
 
     history = client.get(f"/api/v1/cases/{case_id}/history", headers=headers).json()
-    assert [event["to_status"] for event in history].count("RECEIVED") == 3
-    assert [event["to_status"] for event in history].count("QUARANTINED") == 3
+    document_events = [
+        event for event in history if event["entity_type"] == "document"
+    ]
+    assert [event["to_status"] for event in document_events].count("UPLOADED") == 3
+    assert [event["to_status"] for event in document_events].count("QUARANTINED") == 3
     assert any(
         event["from_status"] == "DRAFT" and event["to_status"] == "UPLOADED"
         for event in history

@@ -43,7 +43,11 @@ from app.schemas.verification import (
     VerificationStatus,
 )
 from app.services.rate_limit import enforce_upload_rate_limit
-from app.services.storage import delete_quarantined, resolve_quarantined_path
+from app.services.storage import (
+    StorageOperationError,
+    delete_quarantined,
+    quarantined_exists,
+)
 from app.workers.tasks import (
     ProcessingQueueUnavailable,
     cancel_document_processing,
@@ -172,7 +176,7 @@ async def retry_document_processing(
     ],
     db: Annotated[Session, Depends(get_db)],
 ):
-    document = _get_document(document_id, context, db)
+    _get_document(document_id, context, db)
     try:
         identifier = UUID(document_id)
     except ValueError:
@@ -203,11 +207,19 @@ async def retry_document_processing(
             detail="Malware-infected documents cannot be retried",
         )
 
+    if database_document.storage_deleted_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The quarantined file is unavailable; upload the document again",
+        )
     try:
-        quarantine_path = resolve_quarantined_path(database_document.storage_key)
-    except ValueError:
-        quarantine_path = None
-    if quarantine_path is None or not quarantine_path.is_file():
+        storage_available = quarantined_exists(database_document.storage_key)
+    except (StorageOperationError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Quarantine storage is unavailable",
+        ) from exc
+    if not storage_available:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="The quarantined file is unavailable; upload the document again",
@@ -291,7 +303,13 @@ async def delete_document(
     db: Session = Depends(get_db),
 ):
     document = _get_document(document_id, context, db)
-    delete_quarantined(document["storage_key"])
+    try:
+        delete_quarantined(document["storage_key"])
+    except (StorageOperationError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The quarantined file could not be deleted",
+        ) from exc
     cancel_document_processing(document_id)
     database_document = db.get(DocumentModel, UUID(document_id))
     if database_document is not None:

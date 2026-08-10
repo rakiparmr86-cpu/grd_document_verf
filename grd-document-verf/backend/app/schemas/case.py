@@ -22,8 +22,13 @@ class CaseStatus(str, Enum):
 
 
 class DocumentStatus(str, Enum):
+    # Current public workflow. Legacy values below remain readable while old
+    # database rows are migrated naturally or explicitly.
+    UPLOADED = "UPLOADED"
     RECEIVED = "RECEIVED"
     QUARANTINED = "QUARANTINED"
+    SCANNING = "SCANNING"
+    PROCESSING = "PROCESSING"
     VALIDATED = "VALIDATED"
     OCR_RUNNING = "OCR_RUNNING"
     EXTRACTION_RUNNING = "EXTRACTION_RUNNING"
@@ -64,6 +69,8 @@ class CaseDocumentRead(BaseModel):
     password_protected: bool
     status: DocumentStatus
     malware_scan_status: MalwareScanStatus
+    storage_available: bool
+    storage_deleted_at: datetime | None = None
     observations: list[str] = Field(default_factory=list)
     issuer_or_organisation: str | None = None
     created_at: datetime

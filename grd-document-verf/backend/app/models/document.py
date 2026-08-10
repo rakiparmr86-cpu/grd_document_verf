@@ -1,6 +1,15 @@
+from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import BigInteger, Boolean, Enum, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    Enum,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -35,6 +44,9 @@ class Document(TenantAuditMixin, Base):
         Enum(DocumentType), nullable=False
     )
     status: Mapped[DocumentStatus] = mapped_column(
-        Enum(DocumentStatus), nullable=False, default=DocumentStatus.RECEIVED
+        Enum(DocumentStatus), nullable=False, default=DocumentStatus.UPLOADED
     )
     issuer_or_organisation: Mapped[str | None] = mapped_column(String(300))
+    storage_deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )

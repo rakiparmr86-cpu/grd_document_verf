@@ -29,6 +29,7 @@ from app.services.case_workflow import (
 from app.services.rate_limit import enforce_upload_rate_limit
 from app.services.storage import (
     QuarantinedUpload,
+    StorageOperationError,
     UploadValidationError,
     delete_quarantined,
     quarantine_upload,
@@ -54,6 +55,7 @@ def document_observations(
     password_protected: bool,
     malware_scan_status,
     document_status,
+    storage_deleted_at=None,
 ) -> list[str]:
     detected = getattr(detected_file_type, "value", detected_file_type)
     malware = getattr(malware_scan_status, "value", malware_scan_status)
@@ -62,6 +64,10 @@ def document_observations(
         f"File signature validated as {str(detected).upper()}.",
         f"Document is readable with {page_count} page(s) and is {size_bytes:,} bytes.",
     ]
+    if storage_deleted_at is not None:
+        observations.append(
+            "The quarantined file reached its retention limit and was securely deleted."
+        )
     if password_protected:
         observations.append("The document is password-protected and requires manual review.")
     if malware == MalwareScanStatus.CLEAN.value:
@@ -109,6 +115,8 @@ def document_model_to_record(document: DocumentModel) -> dict:
         "page_count": document.page_count,
         "password_protected": document.password_protected,
         "malware_scan_status": document.malware_scan_status,
+        "storage_available": document.storage_deleted_at is None,
+        "storage_deleted_at": document.storage_deleted_at,
         "document_type": document.document_type,
         "status": document.status,
         "issuer_or_organisation": document.issuer_or_organisation,
@@ -124,6 +132,7 @@ def document_model_to_record(document: DocumentModel) -> dict:
         password_protected=document.password_protected,
         malware_scan_status=document.malware_scan_status,
         document_status=document.status,
+        storage_deleted_at=document.storage_deleted_at,
     )
     return record
 
@@ -275,7 +284,9 @@ def add_document_record(
         "password_protected": upload.password_protected,
         "malware_scan_status": MalwareScanStatus.QUEUED,
         "document_type": document_type,
-        "status": DocumentStatus.RECEIVED,
+        "status": DocumentStatus.UPLOADED,
+        "storage_available": True,
+        "storage_deleted_at": None,
         "issuer_or_organisation": issuer,
         "created_by": str(context.user_id),
         "created_at": now,
@@ -288,7 +299,7 @@ def add_document_record(
         page_count=upload.page_count,
         password_protected=upload.password_protected,
         malware_scan_status=MalwareScanStatus.QUEUED,
-        document_status=DocumentStatus.RECEIVED,
+        document_status=DocumentStatus.UPLOADED,
     )
     case_documents[document_id] = document
     case["documents"].append(document)
@@ -301,8 +312,8 @@ def add_document_record(
             "entity_type": "document",
             "entity_id": document_id,
             "from_status": None,
-            "to_status": DocumentStatus.RECEIVED.value,
-            "reason": "Document received",
+            "to_status": DocumentStatus.UPLOADED.value,
+            "reason": "Document uploaded",
             "changed_by": str(context.user_id),
             "changed_at": now,
         }
@@ -349,6 +360,11 @@ async def secure_add_document(
         upload = await quarantine_upload(file)
     except UploadValidationError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+    except StorageOperationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Quarantine storage is unavailable",
+        ) from exc
 
     hash_key = (str(context.tenant_id), upload.sha256)
     duplicate_id = document_hash_index.get(hash_key)
@@ -364,7 +380,13 @@ async def secure_add_document(
             duplicate_id = str(database_duplicate_id)
             duplicate_exists = True
     if duplicate_exists:
-        delete_quarantined(upload.storage_key)
+        try:
+            delete_quarantined(upload.storage_key)
+        except StorageOperationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="The duplicate upload could not be removed from quarantine",
+            ) from exc
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
@@ -415,7 +437,12 @@ async def secure_add_document(
                     database_case.status = previous_case_status
                     database_case.updated_by = UUID(previous_case_updated_by)
                 db.commit()
-        delete_quarantined(upload.storage_key)
+        try:
+            delete_quarantined(upload.storage_key)
+        except StorageOperationError:
+            # Preserve the original database/queue error. Retention monitoring
+            # can alert on an orphaned object without hiding the root failure.
+            pass
         if isinstance(exc, IntegrityError):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,

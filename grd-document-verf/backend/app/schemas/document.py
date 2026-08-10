@@ -36,6 +36,8 @@ class DocumentRead(BaseModel):
     password_protected: bool
     status: str
     malware_scan_status: MalwareScanStatus
+    storage_available: bool
+    storage_deleted_at: datetime | None = None
     observations: list[str]
     issuer_or_organisation: str | None = None
     created_at: datetime
@@ -47,6 +49,8 @@ class DocumentStatusRead(BaseModel):
     case_id: str
     status: str
     malware_scan_status: MalwareScanStatus
+    storage_available: bool
+    storage_deleted_at: datetime | None = None
     observations: list[str]
     updated_at: datetime
 

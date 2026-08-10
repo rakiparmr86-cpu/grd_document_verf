@@ -19,7 +19,7 @@ RUN python -m pip install --upgrade pip \
 COPY app ./app
 COPY run.py ./run.py
 
-RUN mkdir -p /app/storage/quarantine \
+RUN mkdir -p /app/storage/quarantine /app/celerybeat \
     && chown -R grd:grd /app
 
 FROM base AS api

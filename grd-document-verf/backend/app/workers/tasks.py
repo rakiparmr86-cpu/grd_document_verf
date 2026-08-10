@@ -1,5 +1,7 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
+
+from sqlalchemy import select
 
 from app.core.config import settings
 from app.db.session import SessionLocal
@@ -8,10 +10,15 @@ from app.models.verification_case import VerificationCase
 from app.schemas.case import CaseStatus, DocumentStatus
 from app.schemas.document import MalwareScanStatus
 from app.services.antivirus import MalwareScanResult, scan_file
-from app.services.storage import resolve_quarantined_path
+from app.services.storage import (
+    StorageOperationError,
+    delete_quarantined,
+    materialize_quarantined,
+)
 from app.workers.celery_app import celery_app
 
 pending_processing_tasks: list[dict] = []
+
 
 class ProcessingQueueUnavailable(RuntimeError):
     pass
@@ -64,18 +71,32 @@ def _update_document_record(
     except ValueError:
         return
     with SessionLocal() as session:
-        document = session.get(Document, identifier)
+        document = session.scalar(
+            select(Document).where(Document.id == identifier).with_for_update()
+        )
         if document is None:
             return
         document.malware_scan_status = malware_status
         document.status = document_status
         verification_case = session.get(VerificationCase, document.case_id)
         if verification_case is not None:
-            verification_case.status = {
-                DocumentStatus.COMPLETED: CaseStatus.VERIFIED,
-                DocumentStatus.MANUAL_REVIEW: CaseStatus.NEEDS_REVIEW,
-                DocumentStatus.FAILED: CaseStatus.FAILED,
-            }.get(document_status, verification_case.status)
+            session.flush()
+            document_statuses = set(
+                session.scalars(
+                    select(Document.status).where(
+                        Document.case_id == document.case_id,
+                        Document.tenant_id == document.tenant_id,
+                    )
+                )
+            )
+            if DocumentStatus.FAILED in document_statuses:
+                verification_case.status = CaseStatus.FAILED
+            elif DocumentStatus.MANUAL_REVIEW in document_statuses:
+                verification_case.status = CaseStatus.NEEDS_REVIEW
+            elif document_statuses == {DocumentStatus.COMPLETED}:
+                verification_case.status = CaseStatus.VERIFIED
+            else:
+                verification_case.status = CaseStatus.PROCESSING
         session.commit()
 
 
@@ -87,7 +108,24 @@ def verify_document(
     password_protected: bool = False,
 ) -> dict:
     # Malware scanning is a mandatory gate before any parser, OCR, or ML processing.
-    scan = scan_file(resolve_quarantined_path(object_key))
+    _update_document_record(
+        document_id, MalwareScanStatus.QUEUED, DocumentStatus.SCANNING
+    )
+    try:
+        with materialize_quarantined(object_key) as local_path:
+            scan = scan_file(local_path)
+    except (StorageOperationError, ValueError) as exc:
+        _update_document_record(
+            document_id, MalwareScanStatus.ERROR, DocumentStatus.FAILED
+        )
+        return {
+            "document_id": document_id,
+            "case_id": case_id,
+            "object_key": object_key,
+            "malware_scan_status": MalwareScanStatus.ERROR.value,
+            "malware_scan_detail": str(exc),
+            "status": "failed",
+        }
     base = {
         "document_id": document_id,
         "case_id": case_id,
@@ -105,10 +143,17 @@ def verify_document(
             document_id, MalwareScanStatus.ERROR, DocumentStatus.FAILED
         )
         return {**base, "status": "failed"}
+
+    scan_status = MalwareScanStatus(scan.result.value)
+    _update_document_record(
+        document_id,
+        scan_status,
+        DocumentStatus.PROCESSING,
+    )
     if password_protected:
         _update_document_record(
             document_id,
-            MalwareScanStatus(scan.result.value),
+            scan_status,
             DocumentStatus.MANUAL_REVIEW,
         )
         return {**base, "status": "manual_review"}
@@ -116,7 +161,71 @@ def verify_document(
     # Pipeline: OCR -> extraction -> consistency -> tamper -> duplicate -> risk.
     _update_document_record(
         document_id,
-        MalwareScanStatus(scan.result.value),
+        scan_status,
         DocumentStatus.COMPLETED,
     )
     return {**base, "status": "completed"}
+
+
+@celery_app.task(name="expire_quarantined_documents")
+def expire_quarantined_documents() -> dict:
+    """Delete expired file content while retaining database audit metadata."""
+    if not settings.document_expiry_enabled:
+        return {"status": "disabled", "expired": 0, "errors": 0}
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=settings.document_retention_days)
+    expired = 0
+    errors = 0
+    affected_case_ids: set[UUID] = set()
+
+    with SessionLocal() as session:
+        documents = list(
+            session.scalars(
+                select(Document)
+                .where(
+                    Document.storage_deleted_at.is_(None),
+                    Document.created_at < cutoff,
+                )
+                .order_by(Document.created_at)
+                .limit(settings.document_expiry_batch_size)
+                .with_for_update()
+            )
+        )
+        for document in documents:
+            try:
+                delete_quarantined(document.storage_key)
+            except (StorageOperationError, ValueError):
+                errors += 1
+                continue
+
+            document.storage_deleted_at = now
+            if document.status not in {
+                DocumentStatus.COMPLETED,
+                DocumentStatus.MANUAL_REVIEW,
+                DocumentStatus.FAILED,
+            }:
+                document.status = DocumentStatus.FAILED
+                document.malware_scan_status = MalwareScanStatus.ERROR
+            affected_case_ids.add(document.case_id)
+            expired += 1
+
+        session.flush()
+        for case_id in affected_case_ids:
+            verification_case = session.get(VerificationCase, case_id)
+            if verification_case is None:
+                continue
+            statuses = set(
+                session.scalars(
+                    select(Document.status).where(Document.case_id == case_id)
+                )
+            )
+            if DocumentStatus.FAILED in statuses:
+                verification_case.status = CaseStatus.FAILED
+            elif DocumentStatus.MANUAL_REVIEW in statuses:
+                verification_case.status = CaseStatus.NEEDS_REVIEW
+            elif statuses == {DocumentStatus.COMPLETED}:
+                verification_case.status = CaseStatus.VERIFIED
+        session.commit()
+
+    return {"status": "completed", "expired": expired, "errors": errors}

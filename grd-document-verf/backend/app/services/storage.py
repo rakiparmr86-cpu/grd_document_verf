@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import hashlib
 import warnings
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from uuid import uuid4
 
+import boto3
 import fitz
+from botocore.config import Config
+from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import UploadFile, status
 from PIL import Image, UnidentifiedImageError
 
@@ -37,6 +43,14 @@ class UploadValidationError(Exception):
         super().__init__(detail)
         self.detail = detail
         self.status_code = status_code
+
+
+class StorageOperationError(RuntimeError):
+    """Raised when configured quarantine storage cannot complete an operation."""
+
+
+class StorageObjectNotFoundError(StorageOperationError):
+    """Raised when a quarantine object no longer exists."""
 
 
 @dataclass(frozen=True)
@@ -184,6 +198,101 @@ def _quarantine_root() -> Path:
     return root
 
 
+def _validate_storage_key(storage_key: str) -> str:
+    if not storage_key or Path(storage_key).name != storage_key:
+        raise ValueError("Invalid quarantine storage key")
+    return storage_key
+
+
+@lru_cache(maxsize=4)
+def _create_s3_client(
+    endpoint: str,
+    access_key: str,
+    secret_key: str,
+    region: str,
+):
+    return boto3.client(
+        "s3",
+        endpoint_url=endpoint,
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        region_name=region,
+        config=Config(
+            signature_version="s3v4",
+            connect_timeout=5,
+            read_timeout=60,
+            retries={"max_attempts": 3, "mode": "standard"},
+        ),
+    )
+
+
+def _minio_client():
+    return _create_s3_client(
+        settings.minio_endpoint,
+        settings.minio_access_key,
+        settings.minio_secret_key,
+        settings.minio_region,
+    )
+
+
+def _is_not_found(exc: ClientError) -> bool:
+    code = str(exc.response.get("Error", {}).get("Code", ""))
+    status_code = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+    return (
+        code in {"404", "NoSuchBucket", "NoSuchKey", "NotFound"}
+        or status_code == 404
+    )
+
+
+def _ensure_minio_bucket() -> None:
+    client = _minio_client()
+    try:
+        client.head_bucket(Bucket=settings.minio_bucket_name)
+        return
+    except ClientError as exc:
+        if not _is_not_found(exc):
+            raise StorageOperationError("MinIO quarantine bucket is unavailable") from exc
+    except BotoCoreError as exc:
+        raise StorageOperationError("MinIO quarantine service is unavailable") from exc
+
+    create_args: dict = {"Bucket": settings.minio_bucket_name}
+    if settings.minio_region != "us-east-1":
+        create_args["CreateBucketConfiguration"] = {
+            "LocationConstraint": settings.minio_region
+        }
+    try:
+        client.create_bucket(**create_args)
+    except (BotoCoreError, ClientError) as exc:
+        raise StorageOperationError("MinIO quarantine bucket could not be created") from exc
+
+
+def _store_in_minio(
+    source: Path,
+    storage_key: str,
+    detected_type: DetectedFileType,
+    sha256: str,
+) -> None:
+    content_types = {
+        DetectedFileType.PDF: "application/pdf",
+        DetectedFileType.JPEG: "image/jpeg",
+        DetectedFileType.PNG: "image/png",
+        DetectedFileType.TIFF: "image/tiff",
+    }
+    _ensure_minio_bucket()
+    try:
+        _minio_client().upload_file(
+            str(source),
+            settings.minio_bucket_name,
+            storage_key,
+            ExtraArgs={
+                "ContentType": content_types[detected_type],
+                "Metadata": {"sha256": sha256, "state": "quarantined"},
+            },
+        )
+    except (BotoCoreError, ClientError, OSError) as exc:
+        raise StorageOperationError("The document could not be saved to MinIO") from exc
+
+
 async def quarantine_upload(upload: UploadFile) -> QuarantinedUpload:
     original_filename = _safe_original_filename(upload.filename)
     extension = Path(original_filename).suffix.lower()
@@ -226,12 +335,19 @@ async def quarantine_upload(upload: UploadFile) -> QuarantinedUpload:
         detected_type, page_count, password_protected = _inspect_file(
             temporary_path, extension, header
         )
-        final_path = root / f"{random_name}{CANONICAL_EXTENSIONS[detected_type]}"
-        temporary_path.replace(final_path)
-        final_path.chmod(0o600)
+        storage_key = f"{random_name}{CANONICAL_EXTENSIONS[detected_type]}"
+        if settings.storage_backend == "minio":
+            _store_in_minio(
+                temporary_path, storage_key, detected_type, digest.hexdigest()
+            )
+            temporary_path.unlink(missing_ok=True)
+        else:
+            final_path = root / storage_key
+            temporary_path.replace(final_path)
+            final_path.chmod(0o600)
         return QuarantinedUpload(
             original_filename=original_filename,
-            storage_key=final_path.name,
+            storage_key=storage_key,
             sha256=digest.hexdigest(),
             size_bytes=total_size,
             detected_file_type=detected_type,
@@ -246,8 +362,11 @@ async def quarantine_upload(upload: UploadFile) -> QuarantinedUpload:
 
 
 def resolve_quarantined_path(storage_key: str) -> Path:
-    if not storage_key or Path(storage_key).name != storage_key:
-        raise ValueError("Invalid quarantine storage key")
+    _validate_storage_key(storage_key)
+    if settings.storage_backend != "local":
+        raise StorageOperationError(
+            "MinIO objects must be materialized before local file access"
+        )
     root = _quarantine_root()
     path = (root / storage_key).resolve()
     if path.parent != root:
@@ -255,5 +374,72 @@ def resolve_quarantined_path(storage_key: str) -> Path:
     return path
 
 
+@contextmanager
+def materialize_quarantined(storage_key: str) -> Iterator[Path]:
+    """Yield a local read-only path regardless of the configured storage backend."""
+    storage_key = _validate_storage_key(storage_key)
+    if settings.storage_backend == "local":
+        path = resolve_quarantined_path(storage_key)
+        if not path.is_file():
+            raise StorageObjectNotFoundError("The quarantined file does not exist")
+        yield path
+        return
+
+    root = _quarantine_root()
+    temporary_path = root / f"{uuid4().hex}.download"
+    try:
+        _minio_client().download_file(
+            settings.minio_bucket_name, storage_key, str(temporary_path)
+        )
+        temporary_path.chmod(0o600)
+        yield temporary_path
+    except ClientError as exc:
+        if _is_not_found(exc):
+            raise StorageObjectNotFoundError(
+                "The quarantined MinIO object does not exist"
+            ) from exc
+        raise StorageOperationError(
+            "The quarantined document could not be downloaded from MinIO"
+        ) from exc
+    except (BotoCoreError, OSError) as exc:
+        raise StorageOperationError(
+            "The quarantined document could not be downloaded from MinIO"
+        ) from exc
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def quarantined_exists(storage_key: str) -> bool:
+    storage_key = _validate_storage_key(storage_key)
+    if settings.storage_backend == "local":
+        return resolve_quarantined_path(storage_key).is_file()
+    try:
+        _minio_client().head_object(
+            Bucket=settings.minio_bucket_name, Key=storage_key
+        )
+        return True
+    except ClientError as exc:
+        if _is_not_found(exc):
+            return False
+        raise StorageOperationError(
+            "The MinIO quarantine object could not be checked"
+        ) from exc
+    except BotoCoreError as exc:
+        raise StorageOperationError(
+            "The MinIO quarantine service is unavailable"
+        ) from exc
+
+
 def delete_quarantined(storage_key: str) -> None:
-    resolve_quarantined_path(storage_key).unlink(missing_ok=True)
+    storage_key = _validate_storage_key(storage_key)
+    if settings.storage_backend == "local":
+        resolve_quarantined_path(storage_key).unlink(missing_ok=True)
+        return
+    try:
+        _minio_client().delete_object(
+            Bucket=settings.minio_bucket_name, Key=storage_key
+        )
+    except (BotoCoreError, ClientError) as exc:
+        raise StorageOperationError(
+            "The quarantined MinIO object could not be deleted"
+        ) from exc

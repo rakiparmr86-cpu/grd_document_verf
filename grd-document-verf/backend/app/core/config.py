@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     minio_endpoint: str = "http://localhost:9000"
     minio_access_key: str = "minioadmin"
     minio_secret_key: str = "minioadmin"
+    minio_bucket_name: str = "grd-quarantine"
+    minio_region: str = "us-east-1"
+    storage_backend: Literal["local", "minio"] = "local"
     secret_key: SecretStr = Field(min_length=32)
     jwt_algorithm: str = "HS256"
     jwt_issuer: str = "grd-document-verification"
@@ -45,6 +48,10 @@ class Settings(BaseSettings):
     allow_tiff_uploads: bool = False
     password_protected_pdf_policy: Literal["reject", "review"] = "reject"
     quarantine_storage_path: Path = PROJECT_ROOT / "storage" / "quarantine"
+    document_expiry_enabled: bool = True
+    document_retention_days: int = Field(default=30, gt=0)
+    document_expiry_sweep_seconds: int = Field(default=3600, gt=0)
+    document_expiry_batch_size: int = Field(default=100, gt=0, le=1000)
 
     malware_scan_enabled: bool = True
     malware_scan_fail_closed: bool = True

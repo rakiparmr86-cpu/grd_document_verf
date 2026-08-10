@@ -45,11 +45,33 @@ CASE_TRANSITIONS: dict[CaseStatus, frozenset[CaseStatus]] = {
 }
 
 DOCUMENT_TRANSITIONS: dict[DocumentStatus, frozenset[DocumentStatus]] = {
+    DocumentStatus.UPLOADED: frozenset(
+        {DocumentStatus.QUARANTINED, DocumentStatus.FAILED}
+    ),
     DocumentStatus.RECEIVED: frozenset(
         {DocumentStatus.QUARANTINED, DocumentStatus.VALIDATED, DocumentStatus.FAILED}
     ),
     DocumentStatus.QUARANTINED: frozenset(
-        {DocumentStatus.VALIDATED, DocumentStatus.FAILED, DocumentStatus.MANUAL_REVIEW}
+        {
+            DocumentStatus.SCANNING,
+            DocumentStatus.VALIDATED,
+            DocumentStatus.FAILED,
+            DocumentStatus.MANUAL_REVIEW,
+        }
+    ),
+    DocumentStatus.SCANNING: frozenset(
+        {
+            DocumentStatus.PROCESSING,
+            DocumentStatus.FAILED,
+            DocumentStatus.MANUAL_REVIEW,
+        }
+    ),
+    DocumentStatus.PROCESSING: frozenset(
+        {
+            DocumentStatus.COMPLETED,
+            DocumentStatus.FAILED,
+            DocumentStatus.MANUAL_REVIEW,
+        }
     ),
     DocumentStatus.VALIDATED: frozenset(
         {DocumentStatus.OCR_RUNNING, DocumentStatus.FAILED}
@@ -73,7 +95,11 @@ DOCUMENT_TRANSITIONS: dict[DocumentStatus, frozenset[DocumentStatus]] = {
     ),
     DocumentStatus.COMPLETED: frozenset({DocumentStatus.MANUAL_REVIEW}),
     DocumentStatus.FAILED: frozenset(
-        {DocumentStatus.VALIDATED, DocumentStatus.MANUAL_REVIEW}
+        {
+            DocumentStatus.QUARANTINED,
+            DocumentStatus.VALIDATED,
+            DocumentStatus.MANUAL_REVIEW,
+        }
     ),
     DocumentStatus.MANUAL_REVIEW: frozenset(
         {DocumentStatus.COMPLETED, DocumentStatus.FAILED}

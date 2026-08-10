@@ -38,6 +38,25 @@ services:
       timeout: 3s
       retries: 20
 
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z-cpuv1
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-grdminio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-grdminio-local-change-me}
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
   backend:
     build:
       context: ./backend
@@ -49,16 +68,21 @@ services:
     environment:
       DATABASE_URL: mysql+pymysql://grd:grd@mysql:3306/grd_document_verf
       REDIS_URL: redis://redis:6379/0
+      STORAGE_BACKEND: minio
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-grdminio}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-grdminio-local-change-me}
+      MINIO_BUCKET_NAME: grd-quarantine
       QUARANTINE_STORAGE_PATH: /app/storage/quarantine
       CELERY_DISPATCH_ENABLED: "true"
     ports:
       - "127.0.0.1:8003:8003"
-    volumes:
-      - ./storage/quarantine:/app/storage/quarantine
     depends_on:
       mysql:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     healthcheck:
       test:
@@ -84,16 +108,58 @@ services:
     environment:
       DATABASE_URL: mysql+pymysql://grd:grd@mysql:3306/grd_document_verf
       REDIS_URL: redis://redis:6379/0
+      STORAGE_BACKEND: minio
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-grdminio}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-grdminio-local-change-me}
+      MINIO_BUCKET_NAME: grd-quarantine
       QUARANTINE_STORAGE_PATH: /app/storage/quarantine
       CELERY_DISPATCH_ENABLED: "true"
       CLAMAV_COMMAND: clamscan
     volumes:
-      - ./storage/quarantine:/app/storage/quarantine
       - clamav-data:/var/lib/clamav
     depends_on:
       backend:
         condition: service_healthy
       redis:
+        condition: service_healthy
+
+  celery-beat:
+    build:
+      context: ./backend
+      target: api
+    restart: unless-stopped
+    command:
+      [
+        "python",
+        "-m",
+        "celery",
+        "-A",
+        "app.workers.celery_app.celery_app",
+        "beat",
+        "--loglevel=info",
+        "--schedule=/app/celerybeat/celerybeat-schedule",
+      ]
+    env_file:
+      - path: ./backend/.env
+        format: raw
+    environment:
+      DATABASE_URL: mysql+pymysql://grd:grd@mysql:3306/grd_document_verf
+      REDIS_URL: redis://redis:6379/0
+      STORAGE_BACKEND: minio
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-grdminio}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-grdminio-local-change-me}
+      MINIO_BUCKET_NAME: grd-quarantine
+      DOCUMENT_EXPIRY_ENABLED: "true"
+    volumes:
+      - celery-beat-data:/app/celerybeat
+    depends_on:
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
         condition: service_healthy
 
 volumes:
@@ -102,5 +168,9 @@ volumes:
     name: grd-mysql-data
   redis-data:
     name: grd-redis-data
+  minio-data:
+    name: grd-minio-data
   clamav-data:
     name: grd-clamav-data
+  celery-beat-data:
+    name: grd-celery-beat-data

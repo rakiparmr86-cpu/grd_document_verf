@@ -15,6 +15,7 @@ from app.api.v1.endpoints.documents import verification_cases
 from app.core.config import settings
 from app.db.base import Base
 from app.db.session import engine
+from app.services.storage import _create_s3_client
 from app.workers.tasks import pending_processing_tasks
 
 
@@ -34,6 +35,12 @@ def isolate_in_memory_repositories(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "max_files_per_case", 20)
     monkeypatch.setattr(settings, "allow_tiff_uploads", False)
     monkeypatch.setattr(settings, "password_protected_pdf_policy", "reject")
+    monkeypatch.setattr(settings, "storage_backend", "local")
+    monkeypatch.setattr(settings, "document_expiry_enabled", True)
+    monkeypatch.setattr(settings, "document_retention_days", 30)
+    monkeypatch.setattr(settings, "document_expiry_batch_size", 100)
     monkeypatch.setattr(settings, "celery_dispatch_enabled", False)
     monkeypatch.setattr(settings, "rate_limit_enabled", False)
+    _create_s3_client.cache_clear()
     yield
+    _create_s3_client.cache_clear()

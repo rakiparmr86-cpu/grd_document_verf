@@ -65,3 +65,5 @@ Desktop.ini
 *.temp
 *.bak
 ~$*
+tmp/pdfs/issues_render/**/*.png
+tmp/pdfs/technical_render/**/*.png
