@@ -23,8 +23,8 @@ docker compose up -d --build
 docker compose ps
 ```
 
-The API is available at `http://127.0.0.1:8003`, and API documentation is at
-`http://127.0.0.1:8003/docs`.
+The API is available at `http://127.0.0.1:8004`, and API documentation is at
+`http://127.0.0.1:8004/docs`.
 
 The MinIO S3 API is available at `http://127.0.0.1:9000`, and its management
 console is at `http://127.0.0.1:9001`. Change `MINIO_ROOT_USER` and

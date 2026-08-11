@@ -39,7 +39,7 @@ storage/quarantine/*
 logs/
 *.log
 *.pid
-*.db
+#*.db
 *.sqlite
 *.sqlite3
 backups/

@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "GRD: Debug FastAPI Backend (8003)",
+      "name": "GRD: Debug FastAPI Backend (8004)",
       "type": "debugpy",
       "request": "launch",
       "python": "${workspaceFolder}/grd-document-verf/backend/.venv/Scripts/python.exe",
@@ -12,13 +12,14 @@
         "--host",
         "127.0.0.1",
         "--port",
-        "8003"
+        "8004"
       ],
       "cwd": "${workspaceFolder}/grd-document-verf/backend",
       "envFile": "${workspaceFolder}/grd-document-verf/backend/.env",
       "env": {
         "PYTHONPATH": "${workspaceFolder}/grd-document-verf/backend",
-        "PYTHONUNBUFFERED": "1"
+        "PYTHONUNBUFFERED": "1",
+        "REDIS_URL": "redis://127.0.0.1:6379/0"
       },
       "console": "integratedTerminal",
       "justMyCode": true,
