@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid5
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from jose import jwt
 
 from app.core.config import settings
@@ -32,12 +32,8 @@ def _verify_password(password: str, encoded: str) -> bool:
     response_model=TokenResponse,
     dependencies=[Depends(enforce_login_rate_limit)],
 )
-async def login(payload: LoginRequest, request: Request):
-    if (
-        not settings.local_auth_enabled
-        or request.client is None
-        or request.client.host not in {"127.0.0.1", "::1", "testclient"}
-    ):
+async def login(payload: LoginRequest):
+    if not settings.local_auth_enabled:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Local login is not available"
         )
