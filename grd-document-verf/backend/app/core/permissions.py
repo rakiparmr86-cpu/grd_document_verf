@@ -9,7 +9,7 @@ class Role(str, Enum):
     SENIOR_APPROVER = "senior_approver"
     AUDITOR = "auditor"
     API_CLIENT = "api_client"
-    SYSTEM_ADMIN = "system_admin"
+    SYSTEM_ADMIN = "organisation_admin"
 
 
 class Permission(str, Enum):

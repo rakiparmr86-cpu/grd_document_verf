@@ -36,7 +36,7 @@ const ROLE_OPTIONS = [
   { value: 'senior_approver', label: 'Senior Approver' },
   { value: 'auditor', label: 'Auditor' },
   { value: 'api_client', label: 'API Client' },
-  { value: 'system_admin', label: 'System Admin' },
+  { value: 'organisation_admin', label: 'System Admin' },
 ]
 
 const MORE_ITEMS: MoreItem[] = [
